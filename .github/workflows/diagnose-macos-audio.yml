@@ -37,7 +37,11 @@ jobs:
           set -euo pipefail
           audio_dir="$RUNNER_TEMP/anki-audio-0.1.0"
           mkdir -p "$audio_dir"
-          python -m pip download             --dest "$audio_dir"             --no-deps             --only-binary=:all:             "anki-audio==0.1.0"
+          python -m pip download \
+            --dest "$audio_dir" \
+            --no-deps \
+            --only-binary=:all: \
+            "anki-audio==0.1.0"
 
           audio_wheels=("$audio_dir"/anki_audio-0.1.0-*.whl)
           if [ "${#audio_wheels[@]}" -ne 1 ]; then
@@ -55,12 +59,48 @@ jobs:
             shasum -a 256 "${audio_wheels[0]}"
             file "$app_packages/anki_audio/mpv"
             "$app_packages/anki_audio/mpv" --version
-          } | tee out/installer/logs/audio-stack-verification.txt
+          } | tee out/installer/logs/audio-stack-before-package.txt
 
-          grep -q "mpv 0.34.0" out/installer/logs/audio-stack-verification.txt
+          grep -q "mpv 0.34.0" out/installer/logs/audio-stack-before-package.txt
 
-      - name: Package diagnostic installer
-        run: ./ninja installer:package
+      - name: Package the modified app without rebuilding it
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '\r\n' < .version)"
+          out/pyenv/bin/python qt/tools/build_installer.py --version "$version" package
+
+      - name: Verify audio stack inside the final DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmgs=(out/installer/dist/*.dmg)
+          if [ "${#dmgs[@]}" -ne 1 ]; then
+            echo "::error::expected one DMG"
+            exit 1
+          fi
+
+          mount_dir="$RUNNER_TEMP/anki-audio-dmg"
+          mkdir -p "$mount_dir"
+          device="$(hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$mount_dir" |
+            awk '/^\/dev\// { print $1; exit }')"
+          trap 'hdiutil detach "$device"' EXIT
+
+          source_mpv="out/installer/build/anki/macos/app/Anki.app/Contents/Resources/app_packages/anki_audio/mpv"
+          packaged_mpv="$mount_dir/Anki.app/Contents/Resources/app_packages/anki_audio/mpv"
+          source_hash="$(shasum -a 256 "$source_mpv" | awk '{ print $1 }')"
+          packaged_hash="$(shasum -a 256 "$packaged_mpv" | awk '{ print $1 }')"
+
+          {
+            echo "dmg=${dmgs[0]}"
+            file "$packaged_mpv"
+            "$packaged_mpv" --version
+            echo "source_mpv_sha256=$source_hash"
+            echo "packaged_mpv_sha256=$packaged_hash"
+          } | tee out/installer/logs/audio-stack-in-final-dmg.txt
+
+          grep -q "mpv 0.34.0" out/installer/logs/audio-stack-in-final-dmg.txt
+          test "$source_hash" = "$packaged_hash"
 
       - name: Upload build logs
         if: always()
