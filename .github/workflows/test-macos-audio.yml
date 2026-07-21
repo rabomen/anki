@@ -1,0 +1,59 @@
+name: macOS audio test build
+
+on:
+  push:
+    branches: [build/macos-27-audio-cutoff]
+
+concurrency:
+  group: macos-audio-test
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RELEASE: 2
+  N2_OUTPUT_PROGRESS: "1"
+  N2_OUTPUT_SUCCESS: "1"
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-anki
+
+      - name: Build patched audio wheel
+        run: ./qt/audio/build.sh
+
+      - name: Build app and install patched audio wheel
+        shell: bash
+        run: |
+          ./ninja installer:build
+          app_packages="out/installer/build/anki/macos/app/Anki.app/Contents/Resources/app_packages"
+          rm -rf "$app_packages/anki_audio"
+          audio_wheels=(out/wheels/anki_audio-0.2.3-*.whl)
+          if [ "${#audio_wheels[@]}" -ne 1 ]; then
+            echo "::error::expected one patched audio wheel"
+            exit 1
+          fi
+          unzip -q "${audio_wheels[0]}" "anki_audio/*" -d "$app_packages"
+          ./ninja installer:package
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: logs-installer-macos
+          path: out/installer/logs/
+
+      - name: Upload Apple Silicon installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: installer-macos
+          path: out/installer/dist/
