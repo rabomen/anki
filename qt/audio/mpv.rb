@@ -58,6 +58,11 @@ class Mpv < Formula
   conflicts_with cask: "stolendata-mpv", because: "both install `mpv` binaries"
 
   def install
+    inreplace "audio/out/ao_coreaudio.c",
+              "    OSStatus err = AudioUnitReset(p->audio_unit, kAudioUnitScope_Global, 0);",
+              "    MP_ERR(ao, \"COREAUDIO_RESET_DELAY=%.9f\\n\", ao_get_delay(ao));\n" +
+                "    OSStatus err = AudioUnitReset(p->audio_unit, kAudioUnitScope_Global, 0);"
+
     # LANG is unset by default on macOS and causes issues when calling getlocale
     # or getdefaultlocale in docutils. Force the default c/posix locale since
     # that's good enough for building the manpage.
