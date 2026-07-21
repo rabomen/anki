@@ -1,0 +1,94 @@
+name: mpv CoreAudio EOF analysis
+
+on:
+  push:
+    branches: [build/mpv-coreaudio-eof-analysis]
+
+permissions:
+  contents: read
+
+env:
+  N2_OUTPUT_PROGRESS: "1"
+  N2_OUTPUT_SUCCESS: "1"
+
+jobs:
+  analyze:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-anki
+
+      - name: Build instrumented stock mpv 0.41
+        run: ./qt/audio/build.sh
+
+      - name: Generate deterministic audio samples
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import math
+          import struct
+          import wave
+          from pathlib import Path
+
+          out = Path("out/coreaudio-analysis")
+          out.mkdir(parents=True, exist_ok=True)
+          rate = 48_000
+          for milliseconds in (20, 100, 500, 2000):
+              frames = milliseconds * rate // 1000
+              with wave.open(str(out / f"tone-{milliseconds}ms.wav"), "wb") as wav:
+                  wav.setnchannels(1)
+                  wav.setsampwidth(2)
+                  wav.setframerate(rate)
+                  data = bytearray()
+                  for i in range(frames):
+                      sample = int(20_000 * math.sin(2 * math.pi * 880 * i / rate))
+                      data += struct.pack("<h", sample)
+                  wav.writeframes(data)
+          PY
+
+      - name: Measure pending output when mpv resets CoreAudio
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="out/coreaudio-analysis/coreaudio-eof.log"
+          mpv="out/extracted/mpv/mpv"
+
+          for sample in out/coreaudio-analysis/*.wav; do
+            echo "SAMPLE=$sample" | tee -a "$log"
+            "$mpv" \
+              --no-config \
+              --ao=coreaudio \
+              --vo=null \
+              --audio-display=no \
+              --gapless-audio=no \
+              --keep-open=no \
+              --msg-level=ao=trace \
+              "$sample" 2>&1 | tee -a "$log"
+          done
+
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          log = Path("out/coreaudio-analysis/coreaudio-eof.log").read_text()
+          delays = [float(value) for value in re.findall(
+              r"COREAUDIO_RESET_DELAY=([0-9.]+)", log
+          )]
+          print(f"reset_delays={delays}")
+          if len(delays) != 4:
+              raise SystemExit(f"expected four CoreAudio resets, got {len(delays)}")
+          if not all(delay > 0 for delay in delays):
+              raise SystemExit(f"expected pending output at every reset: {delays}")
+          PY
+
+      - name: Upload analysis log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mpv-coreaudio-eof-analysis
+          path: out/coreaudio-analysis/
