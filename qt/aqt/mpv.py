@@ -91,7 +91,7 @@ class MPVBase:
         "--gapless-audio=no",
     ]
 
-    if is_win:
+    if is_win or is_mac:
         default_argv += ["--af-add=lavfi=[apad=pad_dur=0.150]"]
     if not is_mac:
         # our mpv build for macOS doesn't support this option (compiled out)
