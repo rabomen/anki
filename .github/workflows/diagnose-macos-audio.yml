@@ -1,0 +1,76 @@
+name: macOS audio root-cause check
+
+on:
+  push:
+    branches: [build/macos-27-audio-diagnosis]
+
+concurrency:
+  group: macos-audio-diagnosis
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RELEASE: 2
+  N2_OUTPUT_PROGRESS: "1"
+  N2_OUTPUT_SUCCESS: "1"
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-anki
+
+      - name: Build Anki 26.05
+        run: ./ninja installer:build
+
+      - name: Install the known-good 25.09 audio stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          audio_dir="$RUNNER_TEMP/anki-audio-0.1.0"
+          mkdir -p "$audio_dir"
+          python -m pip download             --dest "$audio_dir"             --no-deps             --only-binary=:all:             "anki-audio==0.1.0"
+
+          audio_wheels=("$audio_dir"/anki_audio-0.1.0-*.whl)
+          if [ "${#audio_wheels[@]}" -ne 1 ]; then
+            echo "::error::expected one anki-audio 0.1.0 wheel"
+            exit 1
+          fi
+
+          app_packages="out/installer/build/anki/macos/app/Anki.app/Contents/Resources/app_packages"
+          rm -rf "$app_packages/anki_audio"
+          unzip -q "${audio_wheels[0]}" "anki_audio/*" -d "$app_packages"
+
+          mkdir -p out/installer/logs
+          {
+            echo "wheel=${audio_wheels[0]}"
+            shasum -a 256 "${audio_wheels[0]}"
+            file "$app_packages/anki_audio/mpv"
+            "$app_packages/anki_audio/mpv" --version
+          } | tee out/installer/logs/audio-stack-verification.txt
+
+          grep -q "mpv 0.34.0" out/installer/logs/audio-stack-verification.txt
+
+      - name: Package diagnostic installer
+        run: ./ninja installer:package
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: logs-macos-audio-diagnosis
+          path: out/installer/logs/
+
+      - name: Upload Apple Silicon installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: installer-macos-known-good-audio
+          path: out/installer/dist/
