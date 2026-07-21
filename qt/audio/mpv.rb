@@ -58,6 +58,9 @@ class Mpv < Formula
   conflicts_with cask: "stolendata-mpv", because: "both install `mpv` binaries"
 
   def install
+    # Restore mpv 0.34's CoreAudio reset behavior (#5157).
+    inreplace "audio/out/ao_coreaudio.c", ".reset          = reset,", ".reset          = stop,"
+
     # LANG is unset by default on macOS and causes issues when calling getlocale
     # or getdefaultlocale in docutils. Force the default c/posix locale since
     # that's good enough for building the manpage.
